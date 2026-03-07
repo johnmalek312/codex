@@ -57,7 +57,7 @@ struct VersionInfo {
 const VERSION_FILENAME: &str = "version.json";
 // We use the latest version from the cask if installation is via homebrew - homebrew does not immediately pick up the latest release and can lag behind.
 const HOMEBREW_CASK_API_URL: &str = "https://formulae.brew.sh/api/cask/codex.json";
-const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
+const LATEST_RELEASE_URL: &str = "https://api.github.com/repos/johnmalek312/codex/releases/latest";
 
 #[derive(Deserialize, Debug, Clone)]
 struct ReleaseInfo {
@@ -169,12 +169,13 @@ pub async fn dismiss_version(config: &Config, version: &str) -> anyhow::Result<(
     Ok(())
 }
 
-fn parse_version(v: &str) -> Option<(u64, u64, u64)> {
+fn parse_version(v: &str) -> Option<(u64, u64, u64, u64)> {
     let mut iter = v.trim().split('.');
     let maj = iter.next()?.parse::<u64>().ok()?;
     let min = iter.next()?.parse::<u64>().ok()?;
     let pat = iter.next()?.parse::<u64>().ok()?;
-    Some((maj, min, pat))
+    let patch = iter.next().and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    Some((maj, min, pat, patch))
 }
 
 #[cfg(test)]
@@ -225,7 +226,16 @@ mod tests {
 
     #[test]
     fn whitespace_is_ignored() {
-        assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3)));
+        assert_eq!(parse_version(" 1.2.3 \n"), Some((1, 2, 3, 0)));
         assert_eq!(is_newer(" 1.2.3 ", "1.2.2"), Some(true));
+    }
+
+    #[test]
+    fn four_segment_versions_compare_correctly() {
+        assert_eq!(parse_version("1.2.3.4"), Some((1, 2, 3, 4)));
+        assert_eq!(is_newer("1.2.3.1", "1.2.3.0"), Some(true));
+        assert_eq!(is_newer("1.2.3.0", "1.2.3.1"), Some(false));
+        assert_eq!(is_newer("1.3.0.0", "1.2.3.5"), Some(true));
+        assert_eq!(is_newer("1.2.3", "1.2.3.0"), Some(false));
     }
 }

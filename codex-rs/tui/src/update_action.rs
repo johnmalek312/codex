@@ -7,6 +7,8 @@ pub enum UpdateAction {
     BunGlobalLatest,
     /// Update via `brew upgrade codex`.
     BrewUpgrade,
+    /// Update via install script from GitHub releases.
+    ScriptInstall,
 }
 
 impl UpdateAction {
@@ -16,6 +18,7 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
+            UpdateAction::ScriptInstall => ("bash", &["-c", "curl -fsSL https://github.com/johnmalek312/codex/releases/latest/download/install.sh | sh"]),
         }
     }
 
@@ -57,7 +60,7 @@ fn detect_update_action(
     {
         Some(UpdateAction::BrewUpgrade)
     } else {
-        None
+        Some(UpdateAction::ScriptInstall)
     }
 }
 
@@ -69,7 +72,7 @@ mod tests {
     fn detects_update_action_without_env_mutation() {
         assert_eq!(
             detect_update_action(false, std::path::Path::new("/any/path"), false, false),
-            None
+            Some(UpdateAction::ScriptInstall)
         );
         assert_eq!(
             detect_update_action(false, std::path::Path::new("/any/path"), true, false),

@@ -101,7 +101,7 @@ release_url_for_asset() {
   asset="$1"
   resolved_version="$2"
 
-  printf 'https://github.com/openai/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
+  printf 'https://github.com/johnmalek312/codex/releases/download/rust-v%s/%s\n' "$resolved_version" "$asset"
 }
 
 require_command() {

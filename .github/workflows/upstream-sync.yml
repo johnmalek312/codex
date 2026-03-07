@@ -1,0 +1,162 @@
+# Sync from upstream openai/codex every hour.
+# - Syncs main branch via PR (auto-merge if CI passes)
+# - Detects new upstream tags and auto-tags with .0 suffix after merge
+
+name: upstream-sync
+on:
+  schedule:
+    - cron: "0 * * * *"  # every hour
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-main:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/openai/codex.git || true
+          git fetch upstream main --tags
+
+      - name: Check if sync needed
+        id: check
+        run: |
+          LOCAL=$(git rev-parse HEAD)
+          UPSTREAM=$(git rev-parse upstream/main)
+          if [ "$LOCAL" = "$UPSTREAM" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            # Check if there's already an open sync PR
+            EXISTING=$(gh pr list --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+            if [ -n "$EXISTING" ]; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "Existing sync PR #${EXISTING} is still open, skipping"
+            else
+              echo "skip=false" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create sync branch and attempt merge
+        if: steps.check.outputs.skip != 'true'
+        id: merge
+        run: |
+          set -euo pipefail
+          BRANCH="upstream-sync"
+          git checkout -B "$BRANCH" origin/main
+
+          if git merge upstream/main --no-edit; then
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+          else
+            git add -A
+            git commit --no-edit || true
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          git push -f origin "$BRANCH"
+
+      - name: Create PR
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          UPSTREAM_SHORT="${UPSTREAM_SHA:0:7}"
+
+          if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
+            TITLE="[CONFLICT] Upstream sync ${UPSTREAM_SHORT}"
+            LABELS="upstream-sync,merge-conflict"
+          else
+            TITLE="Upstream sync ${UPSTREAM_SHORT}"
+            LABELS="upstream-sync,auto-merge"
+          fi
+
+          PR_URL=$(gh pr create \
+            --head "upstream-sync" \
+            --base "main" \
+            --title "$TITLE" \
+            --body "$(cat <<EOF
+          Automated sync from upstream openai/codex.
+
+          Upstream commit: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
+
+          $(if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
+            echo "**Merge conflicts detected.** Manual resolution required."
+          else
+            echo "Clean merge. Will auto-merge if CI passes."
+          fi)
+          EOF
+          )" \
+            --label "$LABELS" 2>&1 || true)
+
+          echo "PR: $PR_URL"
+
+          # Auto-merge if no conflicts
+          if [ "${{ steps.merge.outputs.conflict }}" != "true" ]; then
+            PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$' || true)
+            if [ -n "$PR_NUM" ]; then
+              gh pr merge "$PR_NUM" --auto --merge || true
+            fi
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  sync-tags:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream tags
+        run: |
+          git remote add upstream https://github.com/openai/codex.git || true
+          git fetch upstream --tags
+
+      - name: Detect and create fork tags
+        run: |
+          set -euo pipefail
+
+          # Get all upstream release tags (not alpha/beta)
+          UPSTREAM_TAGS=$(git tag -l 'rust-v*' | grep -E '^rust-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+
+          for TAG in $UPSTREAM_TAGS; do
+            FORK_TAG="${TAG}.0"
+            # Check if we already have this fork tag
+            if git rev-parse "$FORK_TAG" >/dev/null 2>&1; then
+              continue
+            fi
+
+            # Check if the upstream tag commit is an ancestor of our main
+            TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
+            if git merge-base --is-ancestor "$TAG_COMMIT" origin/main 2>/dev/null; then
+              echo "Creating fork tag $FORK_TAG from $TAG"
+              git tag -a "$FORK_TAG" "$TAG_COMMIT" -m "Fork release ${FORK_TAG#rust-v} (upstream ${TAG#rust-v})"
+              git push origin "$FORK_TAG"
+            else
+              echo "Upstream tag $TAG not yet merged into main, skipping $FORK_TAG"
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
