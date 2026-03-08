@@ -35,10 +35,12 @@ jobs:
       - name: Check if sync needed
         id: check
         run: |
-          LOCAL=$(git rev-parse HEAD)
+          # Check if upstream main has commits not in our main
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
           UPSTREAM=$(git rev-parse upstream/main)
-          if [ "$LOCAL" = "$UPSTREAM" ]; then
+          if [ "$MERGE_BASE" = "$UPSTREAM" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with upstream"
           else
             # Check if there's already an open sync PR
             EXISTING=$(gh pr list --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
@@ -90,16 +92,16 @@ jobs:
             --base "main" \
             --title "$TITLE" \
             --body "$(cat <<EOF
-          Automated sync from upstream openai/codex.
+Automated sync from upstream openai/codex.
 
-          Upstream commit: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
+Upstream commit: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
 
-          $(if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
-            echo "**Merge conflicts detected.** Manual resolution required."
-          else
-            echo "Clean merge. Will auto-merge if CI passes."
-          fi)
-          EOF
+$(if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
+  echo "**Merge conflicts detected.** Manual resolution required."
+else
+  echo "Clean merge. Will auto-merge if CI passes."
+fi)
+EOF
           )" \
             --label "$LABELS" 2>&1 || true)
 
@@ -138,8 +140,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Get all upstream release tags (not alpha/beta)
-          UPSTREAM_TAGS=$(git tag -l 'rust-v*' | grep -E '^rust-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V)
+          # Get upstream release tags - filter to sane semver (each segment <= 4 digits)
+          UPSTREAM_TAGS=$(git tag -l 'rust-v*' \
+            | grep -E '^rust-v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$' \
+            | sort -V)
 
           for TAG in $UPSTREAM_TAGS; do
             FORK_TAG="${TAG}.0"
@@ -152,8 +156,10 @@ jobs:
             TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
             if git merge-base --is-ancestor "$TAG_COMMIT" origin/main 2>/dev/null; then
               echo "Creating fork tag $FORK_TAG from $TAG"
-              git tag -a "$FORK_TAG" "$TAG_COMMIT" -m "Fork release ${FORK_TAG#rust-v} (upstream ${TAG#rust-v})"
-              git push origin "$FORK_TAG"
+              # Use GitHub API to create tag (avoids workflows permission issue with git push)
+              gh api repos/${{ github.repository }}/git/refs \
+                -f ref="refs/tags/${FORK_TAG}" \
+                -f sha="${TAG_COMMIT}" || echo "Failed to create tag $FORK_TAG, skipping"
             else
               echo "Upstream tag $TAG not yet merged into main, skipping $FORK_TAG"
             fi
