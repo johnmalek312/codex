@@ -18,7 +18,13 @@ impl UpdateAction {
             UpdateAction::NpmGlobalLatest => ("npm", &["install", "-g", "@openai/codex"]),
             UpdateAction::BunGlobalLatest => ("bun", &["install", "-g", "@openai/codex"]),
             UpdateAction::BrewUpgrade => ("brew", &["upgrade", "--cask", "codex"]),
-            UpdateAction::ScriptInstall => ("bash", &["-c", "curl -fsSL https://github.com/johnmalek312/codex/releases/latest/download/install.sh | sh"]),
+            UpdateAction::ScriptInstall => (
+                "bash",
+                &[
+                    "-c",
+                    "curl -fsSL https://github.com/johnmalek312/codex/releases/latest/download/install.sh | sh",
+                ],
+            ),
         }
     }
 
