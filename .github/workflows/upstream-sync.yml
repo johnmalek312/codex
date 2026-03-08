@@ -11,6 +11,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  workflows: write
 
 jobs:
   sync-main:
@@ -42,19 +43,10 @@ jobs:
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "Already up to date with upstream"
           else
-            # Check if there's already an open sync PR
-            EXISTING=$(gh pr list --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
-            if [ -n "$EXISTING" ]; then
-              echo "skip=true" >> "$GITHUB_OUTPUT"
-              echo "Existing sync PR #${EXISTING} is still open, skipping"
-            else
-              echo "skip=false" >> "$GITHUB_OUTPUT"
-            fi
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Create sync branch and attempt merge
+      - name: Create/update sync branch
         if: steps.check.outputs.skip != 'true'
         id: merge
         run: |
@@ -72,47 +64,54 @@ jobs:
 
           git push -f origin "$BRANCH"
 
-      - name: Create PR
+      - name: Create or update PR
         if: steps.check.outputs.skip != 'true'
         run: |
           set -euo pipefail
           UPSTREAM_SHA=$(git rev-parse upstream/main)
           UPSTREAM_SHORT="${UPSTREAM_SHA:0:7}"
+          CONFLICT="${{ steps.merge.outputs.conflict }}"
 
-          if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
+          if [ "$CONFLICT" = "true" ]; then
             TITLE="[CONFLICT] Upstream sync ${UPSTREAM_SHORT}"
-            LABELS="upstream-sync,merge-conflict"
           else
             TITLE="Upstream sync ${UPSTREAM_SHORT}"
-            LABELS="upstream-sync,auto-merge"
           fi
 
-          PR_URL=$(gh pr create \
-            --head "upstream-sync" \
-            --base "main" \
-            --title "$TITLE" \
-            --body "$(cat <<EOF
-Automated sync from upstream openai/codex.
+          BODY="$(cat <<EOF
+          Automated sync from upstream openai/codex.
 
-Upstream commit: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
+          Upstream HEAD: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
 
-$(if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
-  echo "**Merge conflicts detected.** Manual resolution required."
-else
-  echo "Clean merge. Will auto-merge if CI passes."
-fi)
-EOF
-          )" \
-            --label "$LABELS" 2>&1 || true)
+          $(if [ "$CONFLICT" = "true" ]; then
+            echo "**Merge conflicts detected.** Manual resolution required."
+          else
+            echo "Clean merge. Will auto-merge if CI passes."
+          fi)
+          EOF
+          )"
 
-          echo "PR: $PR_URL"
+          # Check for existing open PR on this branch
+          EXISTING=$(gh pr list --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+
+          if [ -n "$EXISTING" ]; then
+            # Update existing PR title/body (branch already force-pushed)
+            gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY" || true
+            echo "Updated existing PR #${EXISTING}"
+            PR_NUM="$EXISTING"
+          else
+            PR_URL=$(gh pr create \
+              --head "upstream-sync" \
+              --base "main" \
+              --title "$TITLE" \
+              --body "$BODY" 2>&1 || true)
+            echo "PR: $PR_URL"
+            PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$' || true)
+          fi
 
           # Auto-merge if no conflicts
-          if [ "${{ steps.merge.outputs.conflict }}" != "true" ]; then
-            PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$' || true)
-            if [ -n "$PR_NUM" ]; then
-              gh pr merge "$PR_NUM" --auto --merge || true
-            fi
+          if [ "$CONFLICT" != "true" ] && [ -n "$PR_NUM" ]; then
+            gh pr merge "$PR_NUM" --auto --merge || true
           fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

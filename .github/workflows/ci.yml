@@ -1,8 +1,8 @@
 name: ci
 
+# Disabled for fork (upstream npm/node CI, not applicable to Linux-only Rust fork)
 on:
-  pull_request: {}
-  push: { branches: [main] }
+  workflow_dispatch: {}
 
 jobs:
   build-test:
