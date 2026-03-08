@@ -65,6 +65,8 @@ jobs:
 
       - name: Create or update PR
         if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           set -euo pipefail
           UPSTREAM_SHA=$(git rev-parse upstream/main)
@@ -77,8 +79,7 @@ jobs:
             TITLE="Upstream sync ${UPSTREAM_SHORT}"
           fi
 
-          BODY="$(cat <<EOF
-          Automated sync from upstream openai/codex.
+          BODY="Automated sync from upstream openai/codex.
 
           Upstream HEAD: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
 
@@ -86,15 +87,12 @@ jobs:
             echo "**Merge conflicts detected.** Manual resolution required."
           else
             echo "Clean merge. Will auto-merge if CI passes."
-          fi)
-          EOF
-          )"
+          fi)"
 
           # Check for existing open PR on this branch
           EXISTING=$(gh pr list --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
 
           if [ -n "$EXISTING" ]; then
-            # Update existing PR title/body (branch already force-pushed)
             gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY" || true
             echo "Updated existing PR #${EXISTING}"
             PR_NUM="$EXISTING"
@@ -112,8 +110,6 @@ jobs:
           if [ "$CONFLICT" != "true" ] && [ -n "$PR_NUM" ]; then
             gh pr merge "$PR_NUM" --auto --merge || true
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   sync-tags:
     runs-on: ubuntu-latest
