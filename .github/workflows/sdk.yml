@@ -1,9 +1,7 @@
 name: sdk
 
 on:
-  push:
-    branches: [main]
-  pull_request: {}
+  workflow_dispatch: {}  # Disabled for fork
 
 jobs:
   sdks:

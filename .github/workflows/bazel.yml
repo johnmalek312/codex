@@ -4,11 +4,7 @@ name: Bazel (experimental)
 # https://github.com/cerisier/toolchains_llvm_bootstrapped/blob/main/.github/workflows/ci.yaml
 
 on:
-  pull_request: {}
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_dispatch: {}  # Disabled for fork
 
 concurrency:
   # Cancel previous actions from the same PR or branch except 'main' branch.

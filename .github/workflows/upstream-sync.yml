@@ -81,14 +81,13 @@ jobs:
           fi
 
           BODY="Automated sync from upstream openai/codex.
+Upstream HEAD: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
 
-          Upstream HEAD: https://github.com/openai/codex/commit/${UPSTREAM_SHA}
-
-          $(if [ "$CONFLICT" = "true" ]; then
-            echo "**Merge conflicts detected.** Manual resolution required."
-          else
-            echo "Clean merge. Will auto-merge if CI passes."
-          fi)"
+$(if [ "$CONFLICT" = "true" ]; then
+  echo "**Merge conflicts detected.** Manual resolution required."
+else
+  echo "Clean merge. Will auto-merge if CI passes."
+fi)"
 
           # Check for existing open PR on this branch
           EXISTING=$(gh pr list --repo "$REPO" --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
@@ -151,9 +150,10 @@ jobs:
             # Check if the upstream tag commit is an ancestor of our main
             TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
             if git merge-base --is-ancestor "$TAG_COMMIT" origin/main 2>/dev/null; then
-              echo "Creating fork tag $FORK_TAG from $TAG"
-              # PAT_TOKEN has workflows scope, required to push tags on commits with workflow files
-              git tag "$FORK_TAG" "$TAG_COMMIT"
+              echo "Creating fork tag $FORK_TAG at origin/main HEAD"
+              # Tag at main HEAD (not upstream commit) so release includes fork patches
+              MAIN_HEAD=$(git rev-parse origin/main)
+              git tag "$FORK_TAG" "$MAIN_HEAD"
               git push origin "$FORK_TAG" || echo "Failed to push tag $FORK_TAG, skipping"
             else
               echo "Upstream tag $TAG not yet merged into main, skipping $FORK_TAG"
