@@ -69,6 +69,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
+          REPO="${{ github.repository }}"
           UPSTREAM_SHA=$(git rev-parse upstream/main)
           UPSTREAM_SHORT="${UPSTREAM_SHA:0:7}"
           CONFLICT="${{ steps.merge.outputs.conflict }}"
@@ -90,25 +91,26 @@ jobs:
           fi)"
 
           # Check for existing open PR on this branch
-          EXISTING=$(gh pr list --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          EXISTING=$(gh pr list --repo "$REPO" --head "upstream-sync" --state open --json number --jq '.[0].number // empty' 2>/dev/null || true)
 
           if [ -n "$EXISTING" ]; then
-            gh pr edit "$EXISTING" --title "$TITLE" --body "$BODY" || true
+            gh pr edit "$EXISTING" --repo "$REPO" --title "$TITLE" --body "$BODY" || true
             echo "Updated existing PR #${EXISTING}"
             PR_NUM="$EXISTING"
           else
-            PR_URL=$(gh pr create \
-              --head "upstream-sync" \
-              --base "main" \
-              --title "$TITLE" \
-              --body "$BODY" 2>&1 || true)
-            echo "PR: $PR_URL"
-            PR_NUM=$(echo "$PR_URL" | grep -oE '[0-9]+$' || true)
+            # Use GitHub API directly to create PR (avoids checkout token interference)
+            PR_NUM=$(gh api repos/"$REPO"/pulls \
+              -f title="$TITLE" \
+              -f body="$BODY" \
+              -f head="upstream-sync" \
+              -f base="main" \
+              --jq '.number' 2>&1) || { echo "PR create failed: $PR_NUM"; PR_NUM=""; }
+            echo "Created PR #${PR_NUM}"
           fi
 
           # Auto-merge if no conflicts
           if [ "$CONFLICT" != "true" ] && [ -n "$PR_NUM" ]; then
-            gh pr merge "$PR_NUM" --auto --merge || true
+            gh pr merge "$PR_NUM" --repo "$REPO" --auto --merge || true
           fi
 
   sync-tags:
