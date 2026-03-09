@@ -66,7 +66,7 @@ jobs:
       - name: Create or update PR
         if: steps.check.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           UPSTREAM_SHA=$(git rev-parse upstream/main)
