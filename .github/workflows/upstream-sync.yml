@@ -134,7 +134,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Get upstream release tags - filter to sane semver (each segment <= 4 digits)
+          # Get upstream stable release tags only (skip alpha/beta)
           UPSTREAM_TAGS=$(git tag -l 'rust-v*' \
             | grep -E '^rust-v[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$' \
             | sort -V)
@@ -149,10 +149,16 @@ jobs:
             # Check if the upstream tag commit is an ancestor of our main
             TAG_COMMIT=$(git rev-parse "$TAG^{commit}")
             if git merge-base --is-ancestor "$TAG_COMMIT" origin/main 2>/dev/null; then
-              echo "Creating fork tag $FORK_TAG at origin/main HEAD"
-              # Tag at main HEAD (not upstream commit) so release includes fork patches
-              MAIN_HEAD=$(git rev-parse origin/main)
-              git tag "$FORK_TAG" "$MAIN_HEAD"
+              # Find the first commit on main that contains the upstream tag
+              # (i.e. the merge commit that brought it in), so the fork tag
+              # includes fork patches up to that point but nothing beyond.
+              FORK_POINT=$(git rev-list --ancestry-path "$TAG_COMMIT"..origin/main --reverse 2>/dev/null | head -1)
+              if [ -z "$FORK_POINT" ]; then
+                # TAG_COMMIT is directly on main (fast-forward)
+                FORK_POINT="$TAG_COMMIT"
+              fi
+              echo "Creating fork tag $FORK_TAG at $FORK_POINT"
+              git tag "$FORK_TAG" "$FORK_POINT"
               git push origin "$FORK_TAG" || echo "Failed to push tag $FORK_TAG, skipping"
             else
               echo "Upstream tag $TAG not yet merged into main, skipping $FORK_TAG"
