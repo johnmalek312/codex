@@ -90,7 +90,7 @@ jobs:
 
       - if: ${{ contains(matrix.target, 'musl') }}
         name: Install Zig
-        uses: mlugg/setup-zig@v2
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
         with:
           version: 0.14.0
 
@@ -141,6 +141,40 @@ jobs:
           echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS=" >> "$GITHUB_ENV"
 
+<<<<<<< HEAD
+=======
+          sanitize_flags() {
+            local input="$1"
+            input="${input//-fsanitize=undefined/}"
+            input="${input//-fno-sanitize-recover=undefined/}"
+            input="${input//-fno-sanitize-trap=undefined/}"
+            echo "$input"
+          }
+
+          cflags="$(sanitize_flags "${CFLAGS-}")"
+          cxxflags="$(sanitize_flags "${CXXFLAGS-}")"
+          echo "CFLAGS=${cflags}" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=${cxxflags}" >> "$GITHUB_ENV"
+
+      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl' }}
+        name: Configure musl rusty_v8 artifact overrides
+        env:
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
+          release_tag="rusty-v8-v${version}"
+          base_url="https://github.com/openai/codex/releases/download/${release_tag}"
+          archive="https://github.com/openai/codex/releases/download/rusty-v8-v${version}/librusty_v8_release_${TARGET}.a.gz"
+          binding_dir="${RUNNER_TEMP}/rusty_v8"
+          binding_path="${binding_dir}/src_binding_release_${TARGET}.rs"
+          mkdir -p "${binding_dir}"
+          curl -fsSL "${base_url}/src_binding_release_${TARGET}.rs" -o "${binding_path}"
+          echo "RUSTY_V8_ARCHIVE=${archive}" >> "$GITHUB_ENV"
+          echo "RUSTY_V8_SRC_BINDING_PATH=${binding_path}" >> "$GITHUB_ENV"
+
+>>>>>>> upstream/main
       - name: Cargo build
         shell: bash
         run: |
@@ -170,8 +204,23 @@ jobs:
           name: ${{ matrix.target }}
           path: codex-rs/dist/${{ matrix.target }}/*
 
+  argument-comment-lint-release-assets:
+    name: argument-comment-lint release assets
+    needs: tag-check
+    uses: ./.github/workflows/rust-release-argument-comment-lint.yml
+    with:
+      publish: true
+
   release:
+<<<<<<< HEAD
     needs: build
+=======
+    needs:
+      - build
+      - build-windows
+      - shell-tool-mcp
+      - argument-comment-lint-release-assets
+>>>>>>> upstream/main
     name: release
     runs-on: ubuntu-latest
     permissions:
@@ -214,6 +263,59 @@ jobs:
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
+<<<<<<< HEAD
+=======
+      - name: Determine npm publish settings
+        id: npm_publish_settings
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          set -euo pipefail
+          version="${VERSION}"
+
+          if [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          elif [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-alpha\.[0-9]+$ ]]; then
+            echo "should_publish=true" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=alpha" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_publish=false" >> "$GITHUB_OUTPUT"
+            echo "npm_tag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js for npm packaging
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # stage_npm_packages.py requires DotSlash when staging releases.
+      - uses: facebook/install-dotslash@v2
+      - name: Stage npm packages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          ./scripts/stage_npm_packages.py \
+            --release-version "$RELEASE_VERSION" \
+            --package codex \
+            --package codex-responses-api-proxy \
+            --package codex-sdk
+
+      - name: Stage installer scripts
+        run: |
+          cp scripts/install/install.sh dist/install.sh
+          cp scripts/install/install.ps1 dist/install.ps1
+
+>>>>>>> upstream/main
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -222,3 +324,187 @@ jobs:
           body_path: ${{ steps.release_notes.outputs.path }}
           files: dist/**
           prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+<<<<<<< HEAD
+=======
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-config.json
+
+      - uses: facebook/dotslash-publish-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag: ${{ github.ref_name }}
+          config: .github/dotslash-argument-comment-lint-config.json
+
+      - name: Trigger developers.openai.com deploy
+        # Only trigger the deploy if the release is not a pre-release.
+        # The deploy is used to update the developers.openai.com website with the new config schema json file.
+        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        continue-on-error: true
+        env:
+          DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL: ${{ secrets.DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL }}
+        run: |
+          if ! curl -sS -f -o /dev/null -X POST "$DEV_WEBSITE_VERCEL_DEPLOY_HOOK_URL"; then
+            echo "::warning title=developers.openai.com deploy hook failed::Vercel deploy hook POST failed for ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+  # Publish to npm using OIDC authentication.
+  # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
+  # npm docs: https://docs.npmjs.com/trusted-publishers
+  publish-npm:
+    # Publish to npm for stable releases and alpha pre-releases with numeric suffixes.
+    if: ${{ needs.release.outputs.should_publish_npm == 'true' }}
+    name: publish-npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          scope: "@openai"
+
+      # Trusted publishing requires npm CLI version 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download npm tarballs from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          version="$RELEASE_VERSION"
+          tag="$RELEASE_TAG"
+          mkdir -p dist/npm
+          patterns=(
+            "codex-npm-${version}.tgz"
+            "codex-npm-linux-*-${version}.tgz"
+            "codex-npm-darwin-*-${version}.tgz"
+            "codex-npm-win32-*-${version}.tgz"
+            "codex-responses-api-proxy-npm-${version}.tgz"
+            "codex-sdk-npm-${version}.tgz"
+          )
+          for pattern in "${patterns[@]}"; do
+            gh release download "$tag" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern "$pattern" \
+              --dir dist/npm
+          done
+
+      # No NODE_AUTH_TOKEN needed because we use OIDC.
+      - name: Publish to npm
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          NPM_TAG: ${{ needs.release.outputs.npm_tag }}
+        run: |
+          set -euo pipefail
+          prefix=""
+          if [[ -n "${NPM_TAG}" ]]; then
+            prefix="${NPM_TAG}-"
+          fi
+
+          shopt -s nullglob
+          tarballs=(dist/npm/*-"${VERSION}".tgz)
+          if [[ ${#tarballs[@]} -eq 0 ]]; then
+            echo "No npm tarballs found in dist/npm for version ${VERSION}"
+            exit 1
+          fi
+
+          for tarball in "${tarballs[@]}"; do
+            filename="$(basename "${tarball}")"
+            tag=""
+
+            case "${filename}" in
+              codex-npm-linux-*-"${VERSION}".tgz|codex-npm-darwin-*-"${VERSION}".tgz|codex-npm-win32-*-"${VERSION}".tgz)
+                platform="${filename#codex-npm-}"
+                platform="${platform%-${VERSION}.tgz}"
+                tag="${prefix}${platform}"
+                ;;
+              codex-npm-"${VERSION}".tgz|codex-responses-api-proxy-npm-"${VERSION}".tgz|codex-sdk-npm-"${VERSION}".tgz)
+                tag="${NPM_TAG}"
+                ;;
+              *)
+                echo "Unexpected npm tarball: ${filename}"
+                exit 1
+                ;;
+            esac
+
+            publish_cmd=(npm publish "${GITHUB_WORKSPACE}/${tarball}")
+            if [[ -n "${tag}" ]]; then
+              publish_cmd+=(--tag "${tag}")
+            fi
+
+            echo "+ ${publish_cmd[*]}"
+            set +e
+            publish_output="$("${publish_cmd[@]}" 2>&1)"
+            publish_status=$?
+            set -e
+
+            echo "${publish_output}"
+            if [[ ${publish_status} -eq 0 ]]; then
+              continue
+            fi
+
+            if grep -qiE "previously published|cannot publish over|version already exists" <<< "${publish_output}"; then
+              echo "Skipping already-published package version for ${filename}"
+              continue
+            fi
+
+            exit "${publish_status}"
+          done
+
+  winget:
+    name: winget
+    needs: release
+    # Only publish stable/mainline releases to WinGet; pre-releases include a
+    # '-' in the semver string (e.g., 1.2.3-alpha.1).
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    # This job only invokes a GitHub Action to open/update the winget-pkgs PR;
+    # it does not execute Windows-only tooling, so Linux is sufficient.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Publish to WinGet
+        uses: vedantmgoyal9/winget-releaser@19e706d4c9121098010096f9c495a70a7518b30f
+        with:
+          identifier: OpenAI.Codex
+          version: ${{ needs.release.outputs.version }}
+          release-tag: ${{ needs.release.outputs.tag }}
+          fork-user: openai-oss-forks
+          installers-regex: '^codex-(?:x86_64|aarch64)-pc-windows-msvc\.exe\.zip$'
+          token: ${{ secrets.WINGET_PUBLISH_PAT }}
+
+  update-branch:
+    name: Update latest-alpha-cli branch
+    permissions:
+      contents: write
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Update latest-alpha-cli branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api \
+            repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
+            -X PATCH \
+            -f sha="${GITHUB_SHA}" \
+            -F force=true
+>>>>>>> upstream/main

@@ -4,7 +4,7 @@ use std::fs;
 
 use anyhow::Context;
 use anyhow::Result;
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandSource;
@@ -159,7 +159,9 @@ async fn unified_exec_intercepts_apply_patch_exec_command() -> Result<()> {
     let call_id = "uexec-apply-patch";
     let args = json!({
         "cmd": command,
-        "yield_time_ms": 250,
+        // The intercepted apply_patch path spawns a helper process, which can
+        // take longer than a tiny unified-exec yield deadline on CI.
+        "yield_time_ms": 5_000,
     });
 
     let responses = vec![
@@ -2018,7 +2020,7 @@ async fn unified_exec_keeps_long_running_session_after_turn_end() -> Result<()> 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn unified_exec_interrupt_terminates_long_running_session() -> Result<()> {
+async fn unified_exec_interrupt_preserves_long_running_session() -> Result<()> {
     skip_if_no_network!(Ok(()));
     skip_if_sandbox!(Ok(()));
     skip_if_windows!(Ok(()));
@@ -2092,6 +2094,13 @@ async fn unified_exec_interrupt_terminates_long_running_session() -> Result<()> 
 
     codex.submit(Op::Interrupt).await?;
     wait_for_event(&codex, |event| matches!(event, EventMsg::TurnAborted(_))).await;
+
+    assert!(
+        process_is_alive(&pid)?,
+        "expected unified exec process to remain alive after interrupt"
+    );
+
+    codex.submit(Op::CleanBackgroundTerminals).await?;
     wait_for_process_exit(&pid).await?;
 
     Ok(())

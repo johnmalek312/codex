@@ -50,6 +50,10 @@ fn discoverable_connector(id: &str, name: &str, description: &str) -> Discoverab
     }))
 }
 
+fn windows_shell_safety_description() -> String {
+    format!("\n\n{}", super::windows_destructive_filesystem_guidance())
+}
+
 fn search_capable_model_info() -> ModelInfo {
     let config = test_config();
     let mut model_info =
@@ -465,10 +469,13 @@ fn test_full_toolset_specs_for_gpt5_codex_unified_exec_web_search() {
         create_view_image_tool(config.can_request_original_image_detail),
         create_spawn_agent_tool(&config),
         create_send_input_tool(),
-        create_resume_agent_tool(),
         create_wait_agent_tool(),
         create_close_agent_tool(),
     ] {
+        expected.insert(tool_name(&spec).to_string(), spec);
+    }
+    if !config.multi_agent_v2 {
+        let spec = create_resume_agent_tool();
         expected.insert(tool_name(&spec).to_string(), spec);
     }
 
@@ -514,6 +521,96 @@ fn test_build_specs_collab_tools_enabled() {
         &["spawn_agent", "send_input", "wait_agent", "close_agent"],
     );
     assert_lacks_tool_name(&tools, "spawn_agents_on_csv");
+}
+
+#[test]
+fn test_build_specs_multi_agent_v2_uses_task_names_and_hides_resume() {
+    let config = test_config();
+    let model_info = ModelsManager::construct_model_info_offline_for_tests("gpt-5-codex", &config);
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Collab);
+    features.enable(Feature::MultiAgentV2);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+    let (tools, _) = build_specs(&tools_config, None, None, &[]).build();
+
+    let spawn_agent = find_tool(&tools, "spawn_agent");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &spawn_agent.spec
+    else {
+        panic!("spawn_agent should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("spawn_agent should use object params");
+    };
+    assert!(properties.contains_key("task_name"));
+    assert_eq!(required.as_ref(), None);
+    let output_schema = output_schema
+        .as_ref()
+        .expect("spawn_agent should define output schema");
+    assert_eq!(
+        output_schema["required"],
+        json!(["agent_id", "task_name", "nickname"])
+    );
+
+    let send_input = find_tool(&tools, "send_input");
+    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = &send_input.spec else {
+        panic!("send_input should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("send_input should use object params");
+    };
+    assert!(properties.contains_key("target"));
+    assert_eq!(required.as_ref(), Some(&vec!["target".to_string()]));
+
+    let wait_agent = find_tool(&tools, "wait_agent");
+    let ToolSpec::Function(ResponsesApiTool {
+        parameters,
+        output_schema,
+        ..
+    }) = &wait_agent.spec
+    else {
+        panic!("wait_agent should be a function tool");
+    };
+    let JsonSchema::Object {
+        properties,
+        required,
+        ..
+    } = parameters
+    else {
+        panic!("wait_agent should use object params");
+    };
+    assert!(properties.contains_key("targets"));
+    assert_eq!(required.as_ref(), Some(&vec!["targets".to_string()]));
+    let output_schema = output_schema
+        .as_ref()
+        .expect("wait_agent should define output schema");
+    assert_eq!(
+        output_schema["properties"]["status"]["description"],
+        json!("Final statuses keyed by canonical task name when available, otherwise by agent id.")
+    );
+    assert_lacks_tool_name(&tools, "resume_agent");
 }
 
 #[test]
@@ -1690,7 +1787,7 @@ fn test_build_specs_mcp_tools_sorted_by_name() {
 }
 
 #[test]
-fn search_tool_description_includes_only_codex_apps_connector_names() {
+fn search_tool_description_lists_each_codex_apps_connector_once() {
     let model_info = search_capable_model_info();
     let mut features = Features::with_defaults();
     features.enable(Feature::Apps);
@@ -1736,7 +1833,45 @@ fn search_tool_description_includes_only_codex_apps_connector_names() {
                     connector_id: Some("calendar".to_string()),
                     connector_name: Some("Calendar".to_string()),
                     plugin_display_names: Vec::new(),
-                    connector_description: None,
+                    connector_description: Some(
+                        "Plan events and manage your calendar.".to_string(),
+                    ),
+                },
+            ),
+            (
+                "mcp__codex_apps__calendar_list_events".to_string(),
+                ToolInfo {
+                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    tool_name: "_list_events".to_string(),
+                    tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                    tool: mcp_tool(
+                        "calendar-list-events",
+                        "List calendar events",
+                        serde_json::json!({"type": "object"}),
+                    ),
+                    connector_id: Some("calendar".to_string()),
+                    connector_name: Some("Calendar".to_string()),
+                    plugin_display_names: Vec::new(),
+                    connector_description: Some(
+                        "Plan events and manage your calendar.".to_string(),
+                    ),
+                },
+            ),
+            (
+                "mcp__codex_apps__gmail_search_threads".to_string(),
+                ToolInfo {
+                    server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                    tool_name: "_search_threads".to_string(),
+                    tool_namespace: "mcp__codex_apps__gmail".to_string(),
+                    tool: mcp_tool(
+                        "gmail-search-threads",
+                        "Search email threads",
+                        serde_json::json!({"type": "object"}),
+                    ),
+                    connector_id: Some("gmail".to_string()),
+                    connector_name: Some("Gmail".to_string()),
+                    plugin_display_names: Vec::new(),
+                    connector_description: Some("Find and summarize email threads.".to_string()),
                 },
             ),
             (
@@ -1762,7 +1897,14 @@ fn search_tool_description_includes_only_codex_apps_connector_names() {
         panic!("expected tool_search tool");
     };
     let description = description.as_str();
-    assert!(description.contains("Calendar"));
+    assert!(description.contains("- Calendar: Plan events and manage your calendar."));
+    assert!(description.contains("- Gmail: Find and summarize email threads."));
+    assert_eq!(
+        description
+            .matches("- Calendar: Plan events and manage your calendar.")
+            .count(),
+        1
+    );
     assert!(!description.contains("mcp__rmcp__echo"));
 }
 
@@ -1874,8 +2016,56 @@ fn search_tool_description_handles_no_enabled_apps() {
         panic!("expected tool_search tool");
     };
 
-    assert!(description.contains("(None currently enabled)"));
-    assert!(!description.contains("{{app_names}}"));
+    assert!(description.contains("None currently enabled."));
+    assert!(!description.contains("{{app_descriptions}}"));
+}
+
+#[test]
+fn search_tool_description_falls_back_to_connector_name_without_description() {
+    let model_info = search_capable_model_info();
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Apps);
+    let available_models = Vec::new();
+    let tools_config = ToolsConfig::new(&ToolsConfigParams {
+        model_info: &model_info,
+        available_models: &available_models,
+        features: &features,
+        web_search_mode: Some(WebSearchMode::Cached),
+        session_source: SessionSource::Cli,
+        sandbox_policy: &SandboxPolicy::DangerFullAccess,
+        windows_sandbox_level: WindowsSandboxLevel::Disabled,
+    });
+
+    let (tools, _) = build_specs(
+        &tools_config,
+        None,
+        Some(HashMap::from([(
+            "mcp__codex_apps__calendar_create_event".to_string(),
+            ToolInfo {
+                server_name: crate::mcp::CODEX_APPS_MCP_SERVER_NAME.to_string(),
+                tool_name: "_create_event".to_string(),
+                tool_namespace: "mcp__codex_apps__calendar".to_string(),
+                tool: mcp_tool(
+                    "calendar_create_event",
+                    "Create calendar event",
+                    serde_json::json!({"type": "object"}),
+                ),
+                connector_id: Some("calendar".to_string()),
+                connector_name: Some("Calendar".to_string()),
+                plugin_display_names: Vec::new(),
+                connector_description: None,
+            },
+        )])),
+        &[],
+    )
+    .build();
+    let search_tool = find_tool(&tools, TOOL_SEARCH_TOOL_NAME);
+    let ToolSpec::ToolSearch { description, .. } = &search_tool.spec else {
+        panic!("expected tool_search tool");
+    };
+
+    assert!(description.contains("- Calendar"));
+    assert!(!description.contains("- Calendar:"));
 }
 
 #[test]
@@ -2004,7 +2194,8 @@ fn tool_suggest_description_lists_discoverable_tools() {
     assert!(description.contains("Sample Plugin"));
     assert!(description.contains("Plan events and schedules."));
     assert!(description.contains("Find and summarize email threads."));
-    assert!(description.contains("id: `sample@test`, type: plugin, action: enable"));
+    assert!(description.contains("id: `sample@test`, type: plugin, action: install"));
+    assert!(description.contains("`action_type`: `install` or `enable`"));
     assert!(
         description.contains("skills; MCP servers: sample-docs; app connectors: connector_sample")
     );
@@ -2269,7 +2460,7 @@ fn test_shell_tool() {
     assert_eq!(name, "shell");
 
     let expected = if cfg!(windows) {
-            r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
+        r#"Runs a Powershell command (Windows) and returns its output. Arguments to `shell` will be passed to CreateProcessW(). Most commands should be prefixed with ["powershell.exe", "-Command"].
 
 Examples of valid command strings:
 
@@ -2279,11 +2470,37 @@ Examples of valid command strings:
 - ps aux | grep python: ["powershell.exe", "-Command", "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"]
 - setting an env var: ["powershell.exe", "-Command", "$env:FOO='bar'; echo $env:FOO"]
 - running an inline Python script: ["powershell.exe", "-Command", "@'\\nprint('Hello, world!')\\n'@ | python -"]"#
-        } else {
-            r#"Runs a shell command and returns its output.
+                .to_string()
+                + &windows_shell_safety_description()
+    } else {
+        r#"Runs a shell command and returns its output.
 - The arguments to `shell` will be passed to execvp(). Most terminal commands should be prefixed with ["bash", "-lc"].
 - Always set the `workdir` param when using the shell function. Do not use `cd` unless absolutely necessary."#
-        }.to_string();
+                .to_string()
+    };
+    assert_eq!(description, &expected);
+}
+
+#[test]
+fn test_exec_command_tool_windows_description_includes_shell_safety_guidance() {
+    let tool = super::create_exec_command_tool(true, false);
+    let ToolSpec::Function(ResponsesApiTool {
+        description, name, ..
+    }) = &tool
+    else {
+        panic!("expected function tool");
+    };
+    assert_eq!(name, "exec_command");
+
+    let expected = if cfg!(windows) {
+        format!(
+            "Runs a command in a PTY, returning output or a session ID for ongoing interaction.{}",
+            windows_shell_safety_description()
+        )
+    } else {
+        "Runs a command in a PTY, returning output or a session ID for ongoing interaction."
+            .to_string()
+    };
     assert_eq!(description, &expected);
 }
 
@@ -2388,7 +2605,9 @@ Examples of valid command strings:
 - recursive grep: "Get-ChildItem -Path C:\\myrepo -Recurse | Select-String -Pattern 'TODO' -CaseSensitive"
 - ps aux | grep python: "Get-Process | Where-Object { $_.ProcessName -like '*python*' }"
 - setting an env var: "$env:FOO='bar'; echo $env:FOO"
-- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -"#.to_string()
+- running an inline Python script: "@'\\nprint('Hello, world!')\\n'@ | python -""#
+            .to_string()
+            + &windows_shell_safety_description()
     } else {
         r#"Runs a shell command and returns its output.
 - Always set the `workdir` param when using the shell_command function. Do not use `cd` unless absolutely necessary."#.to_string()
@@ -2533,7 +2752,7 @@ fn code_mode_augments_builtin_tool_descriptions_with_typed_sample() {
 
     assert_eq!(
         description,
-        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<unknown>; };\n```"
+        "View a local image from the filesystem (only use if given a full filepath by the user, and the image isn't already attached to the thread context within <image ...> tags).\n\nexec tool declaration:\n```ts\ndeclare const tools: { view_image(args: { path: string; }): Promise<{ detail: string | null; image_url: string; }>; };\n```"
     );
 }
 
@@ -2599,7 +2818,7 @@ fn code_mode_only_restricts_model_tools_to_exec_tools() {
         "gpt-5.1-codex",
         &features,
         Some(WebSearchMode::Live),
-        &["exec", "exec_wait"],
+        &["exec", "wait"],
     );
 }
 
@@ -2630,7 +2849,7 @@ fn code_mode_only_exec_description_includes_full_nested_tool_details() {
     assert!(!description.contains("Enabled nested tools:"));
     assert!(!description.contains("Nested tool reference:"));
     assert!(description.starts_with(
-        "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly"
+        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
     assert!(description.contains("### `update_plan` (`update_plan`)"));
     assert!(description.contains("### `view_image` (`view_image`)"));
@@ -2660,7 +2879,7 @@ fn code_mode_exec_description_omits_nested_tool_details_when_not_code_mode_only(
     };
 
     assert!(!description.starts_with(
-        "Use `exec/exec_wait` tool to run all other tools, do not attempt to use any other tools directly"
+        "Use `exec/wait` tool to run all other tools, do not attempt to use any other tools directly"
     ));
     assert!(!description.contains("### `update_plan` (`update_plan`)"));
     assert!(!description.contains("### `view_image` (`view_image`)"));
